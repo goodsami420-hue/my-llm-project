@@ -6,34 +6,20 @@ from model import GPT
 from tokenizer import BPETokenizer
 
 
-def get_device():
-    try:
-        import torch_directml
-        return torch_directml.device()
-    except ImportError:
-        pass
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
-
-
 def load_model(cfg):
-    # fallback: best -> final -> latest
     checkpoint_path = cfg.get_checkpoint_path()
     if checkpoint_path is None:
         print("No checkpoint found! Run train.py first.")
         sys.exit(1)
     print(f"Loading checkpoint: {checkpoint_path}")
 
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
-
-    mcfg = ModelConfig()
+    ckpt  = torch.load(checkpoint_path, map_location="cpu")
+    mcfg  = ModelConfig()
     saved = ckpt.get("model_cfg", {})
     for k, v in saved.items():
         setattr(mcfg, k, v)
     mcfg.vocab_size = ckpt["model_state"]["lm_head.weight"].shape[0]
 
-    # create model on CPU, load weights, then move to device
     model = GPT(mcfg)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
@@ -45,10 +31,10 @@ def load_model(cfg):
     return model, tokenizer
 
 
-def generate(model, tokenizer, prompt_ids, max_new_tokens=80, temperature=0.8, top_k=40):
+def generate(model, tokenizer, prompt_ids, max_new_tokens=100, temperature=0.7, top_k=40):
     block_size = model.cfg.block_size
-    idx = torch.tensor([prompt_ids[-block_size:]], dtype=torch.long)
-    generated = []
+    idx        = torch.tensor([prompt_ids[-block_size:]], dtype=torch.long)
+    generated  = []
 
     with torch.no_grad():
         for _ in range(max_new_tokens):
@@ -65,7 +51,7 @@ def generate(model, tokenizer, prompt_ids, max_new_tokens=80, temperature=0.8, t
             # repetition penalty
             for tid in set(generated[-30:]):
                 if 0 <= tid < logits.size(-1):
-                    logits[0, tid] /= 1.5
+                    logits[0, tid] /= 1.3
 
             logits = logits / max(temperature, 1e-8)
 
@@ -78,13 +64,12 @@ def generate(model, tokenizer, prompt_ids, max_new_tokens=80, temperature=0.8, t
                 break
 
             next_token = torch.multinomial(probs, num_samples=1)
-            token_id = next_token.item()
+            token_id   = next_token.item()
 
             if token_id == tokenizer.end_id:
                 break
 
-            skip_ids = {tokenizer.pad_id, tokenizer.bos_id,
-                        tokenizer.sep_id, tokenizer.eos_id}
+            skip_ids = {tokenizer.pad_id, tokenizer.sep_id}
             if token_id not in skip_ids:
                 generated.append(token_id)
 
@@ -94,7 +79,7 @@ def generate(model, tokenizer, prompt_ids, max_new_tokens=80, temperature=0.8, t
 
 
 def chat():
-    cfg = ChatConfig()
+    cfg        = ChatConfig()
     model, tokenizer = load_model(cfg)
     block_size = model.cfg.block_size
 
@@ -124,15 +109,18 @@ def chat():
 
         history.append({"role": "user", "content": user_input})
 
+        # MATCH training format exactly
         prompt_ids = []
         for turn in history:
             if turn["role"] == "user":
-                prompt_ids += tokenizer.encode_conversation(turn["content"])
+                text = "<|user|> " + turn["content"].strip()
+                prompt_ids += tokenizer.encode(text)
             else:
-                prompt_ids += ([tokenizer.eos_id]
-                               + tokenizer.encode(turn["content"])
-                               + [tokenizer.end_id])
-        prompt_ids += [tokenizer.eos_id]
+                text = "<|assistant|> " + turn["content"].strip()
+                prompt_ids += tokenizer.encode(text) + [tokenizer.eos_id]
+
+        # signal model to generate assistant response
+        prompt_ids += tokenizer.encode("<|assistant|>")
 
         max_prompt = block_size - cfg.max_new_tokens
         if max_prompt < 1:
@@ -141,16 +129,17 @@ def chat():
 
         print("AI: ", end="", flush=True)
 
-        new_ids = generate(
-            model, tokenizer, prompt_ids,
-            max_new_tokens=cfg.max_new_tokens,
-            temperature=cfg.temperature,
-            top_k=cfg.top_k,
-        )
+        new_ids  = generate(model, tokenizer, prompt_ids,
+                            max_new_tokens=cfg.max_new_tokens,
+                            temperature=cfg.temperature,
+                            top_k=cfg.top_k)
 
-        response = tokenizer.decode(new_ids).strip()
+        # decode only normal tokens
+        normal_ids = [i for i in new_ids if i < tokenizer._enc.n_vocab]
+        response   = tokenizer.decode(normal_ids).strip()
+
         if not response:
-            response = "I don't know."
+            response = "..."
 
         print(response)
         print()
