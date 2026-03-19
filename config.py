@@ -31,7 +31,7 @@ class TrainConfig:
 class ChatConfig:
     tokenizer_path  = "tokenizer/tokenizer.json"
     max_new_tokens  = 80
-    temperature     = 0.8
+    temperature     = 0.7
     top_k           = 40
     top_p           = 0.9
     device          = "auto"
