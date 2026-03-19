@@ -11,7 +11,7 @@ def load_model(cfg):
     if checkpoint_path is None:
         print("No checkpoint found! Run train.py first.")
         sys.exit(1)
-    print(f"Loading checkpoint: {checkpoint_path}")
+    print(f"Loading: {checkpoint_path}")
 
     ckpt  = torch.load(checkpoint_path, map_location="cpu")
     mcfg  = ModelConfig()
@@ -66,10 +66,13 @@ def generate(model, tokenizer, prompt_ids, max_new_tokens=100, temperature=0.7, 
             next_token = torch.multinomial(probs, num_samples=1)
             token_id   = next_token.item()
 
-            if token_id == tokenizer.end_id:
+            # stop at EOS
+            if token_id == tokenizer.eos_id:
                 break
 
-            skip_ids = {tokenizer.pad_id, tokenizer.sep_id}
+            # skip special tokens in output
+            skip_ids = {tokenizer.pad_id, tokenizer.bos_id,
+                        tokenizer.assistant_id, tokenizer.end_id}
             if token_id not in skip_ids:
                 generated.append(token_id)
 
@@ -109,7 +112,7 @@ def chat():
 
         history.append({"role": "user", "content": user_input})
 
-        # MATCH training format exactly
+        # EXACT match with training format
         prompt_ids = []
         for turn in history:
             if turn["role"] == "user":
@@ -119,7 +122,7 @@ def chat():
                 text = "<|assistant|> " + turn["content"].strip()
                 prompt_ids += tokenizer.encode(text) + [tokenizer.eos_id]
 
-        # signal model to generate assistant response
+        # signal model: generate assistant response
         prompt_ids += tokenizer.encode("<|assistant|>")
 
         max_prompt = block_size - cfg.max_new_tokens
@@ -134,10 +137,7 @@ def chat():
                             temperature=cfg.temperature,
                             top_k=cfg.top_k)
 
-        # decode only normal tokens
-        normal_ids = [i for i in new_ids if i < tokenizer._enc.n_vocab]
-        response   = tokenizer.decode(normal_ids).strip()
-
+        response = tokenizer.decode(new_ids).strip()
         if not response:
             response = "..."
 
