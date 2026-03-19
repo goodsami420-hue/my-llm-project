@@ -2,44 +2,57 @@ import os
 import json
 import tiktoken
 
-PAD_TOKEN  = "<|pad|>"
-BOS_TOKEN  = "<|user|>"
-EOS_TOKEN  = "<|assistant|>"
-SEP_TOKEN  = "<|sep|>"
-END_TOKEN  = "<|end|>"
-SPECIAL_TOKENS = [PAD_TOKEN, BOS_TOKEN, EOS_TOKEN, SEP_TOKEN, END_TOKEN]
+# Special tokens — must NOT be split into subwords
+SPECIAL_TOKENS = {
+    "<|user|>":      50257,
+    "<|assistant|>": 50258,
+    "<|eos|>":       50259,
+    "<|pad|>":       50260,
+    "<|end|>":       50261,
+}
+
+VOCAB_SIZE = 50262  # 50257 (gpt2) + 5 special tokens
 
 
 class BPETokenizer:
     def __init__(self):
+        # Register special tokens so they are NEVER split into subwords
         self._enc = tiktoken.get_encoding("gpt2")
-        self._special = {}
-        start_id = self._enc.n_vocab
-        for i, tok in enumerate(SPECIAL_TOKENS):
-            self._special[tok] = start_id + i
-        self._id_to_special = {v: k for k, v in self._special.items()}
+        self._special = SPECIAL_TOKENS
+        self._id_to_token = {v: k for k, v in SPECIAL_TOKENS.items()}
 
     @property
     def vocab_size(self):
-        return self._enc.n_vocab + len(SPECIAL_TOKENS)
+        return VOCAB_SIZE
 
     @property
-    def pad_id(self):  return self._special[PAD_TOKEN]
+    def pad_id(self):       return SPECIAL_TOKENS["<|pad|>"]
     @property
-    def bos_id(self):  return self._special[BOS_TOKEN]
+    def bos_id(self):       return SPECIAL_TOKENS["<|user|>"]
     @property
-    def eos_id(self):  return self._special[EOS_TOKEN]
+    def eos_id(self):       return SPECIAL_TOKENS["<|eos|>"]
     @property
-    def sep_id(self):  return self._special[SEP_TOKEN]
+    def assistant_id(self): return SPECIAL_TOKENS["<|assistant|>"]
     @property
-    def end_id(self):  return self._special[END_TOKEN]
+    def end_id(self):       return SPECIAL_TOKENS["<|end|>"]
 
     @property
     def id_to_token(self):
-        return self._id_to_special
+        return self._id_to_token
 
     def encode(self, text):
-        return self._enc.encode(text, allowed_special="all")
+        """Encode text, keeping special tokens intact."""
+        # Split on special tokens first so they are never broken into subwords
+        import re
+        pattern = "(" + "|".join(re.escape(k) for k in SPECIAL_TOKENS.keys()) + ")"
+        parts   = re.split(pattern, text)
+        ids     = []
+        for part in parts:
+            if part in SPECIAL_TOKENS:
+                ids.append(SPECIAL_TOKENS[part])
+            elif part:
+                ids.extend(self._enc.encode(part))
+        return ids
 
     def decode(self, ids):
         normal = [i for i in ids if i < self._enc.n_vocab]
@@ -47,16 +60,10 @@ class BPETokenizer:
             return ""
         return self._enc.decode(normal)
 
-    def encode_conversation(self, user_msg):
-        return [self.bos_id] + self.encode(user_msg) + [self.sep_id]
-
-    def train(self, texts, vocab_size=50262, min_freq=2):
-        print(f"Using tiktoken GPT-2 tokenizer | vocab size: {self.vocab_size}")
-
     def save(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            json.dump({"type": "tiktoken", "encoding": "gpt2"}, f)
+            json.dump({"type": "tiktoken", "encoding": "gpt2", "special_tokens": SPECIAL_TOKENS}, f)
         print(f"Tokenizer saved -> {path}")
 
     def load(self, path):
